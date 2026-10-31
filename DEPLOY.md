@@ -3,6 +3,12 @@
 全程约 20 分钟，唯一要动脑的地方是第 3 步的短信验证码。
 需要准备：一个 GitHub 账号、一台装了 docker 的服务器（1C1G 够）、一张能收短信的手机卡。
 
+> **当前进度（2026-11-01）**
+> - 仓库已建好：https://github.com/a3467712660/wb-checkin （Public，已推 5 个提交）
+> - 镜像已构建并公开：`ghcr.io/a3467712660/wb-checkin:latest`，`build` 与 `smoke` 全绿，匿名 pull 已验证返回 200
+> - 所以**第 1、2 步可以整段跳过**，从第 3 步开始
+> - 现役环境是 CentOS 7 裸机（`/opt/workbuddy` + crontab，无 docker），容器方案留作换机备用
+
 ---
 
 ## 第 1 步：建仓库、推代码（你本机 / GitHub 网页）
