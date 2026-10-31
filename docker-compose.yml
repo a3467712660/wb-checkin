@@ -12,6 +12,10 @@ services:
       WORKBUDDY_STATE_DIR: /data
       RUN_TIMES: ${RUN_TIMES:-07:00,12:00,23:30}
       RUN_ON_START: ${RUN_ON_START:-0}
+      # 单轮最长秒数：网络卡死时由调度器到点 kill，避免堵住后面所有时间点
+      RUN_TIMEOUT: ${RUN_TIMEOUT:-3600}
+      # 额外命令行参数，例如 --tasks checkin,travel（留空 = 上游默认全跑）
+      TASK_ARGS: ${TASK_ARGS:-}
       WORKBUDDY_NOTIFY: ${WORKBUDDY_NOTIFY:-always}
     volumes:
       - ./data:/data
@@ -21,6 +25,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # 心跳只用于「看得出有没有在跑」，不要指望 unhealthy 会触发重启：
+    # Docker 本身不会因为 unhealthy 重启容器（需要额外的 autoheal 才有那效果）。
+    # 真正保命的是 restart: unless-stopped —— 进程崩了会自动拉起。
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sys,time;p='/data/.heartbeat';sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<100800 else 1)"]
       interval: 30m

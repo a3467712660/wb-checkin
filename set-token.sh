@@ -1,14 +1,16 @@
 #!/bin/bash
 # 把登录拿到的 token 写进 secrets.env，并做一次凭据自检
 # 用法：
-#   ./set-token.sh                      # 自动读取 data/wb_login_result.json 里最新一条
-#   ./set-token.sh '手机号:AT:RT'        # 直接给一行
+#   ./set-token.sh                             # 自动读取 data/wb_login_result.json 里最新一条
+#   ./set-token.sh '手机号:AT:RT'               # 单个账号
+#   ./set-token.sh '手机号:AT:RT@手机号:AT:RT'   # 多账号用 @ 分隔
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$APP_DIR/data"
 SECRETS="$APP_DIR/secrets.env"
 RESULT="$DATA_DIR/wb_login_result.json"
+cd "$APP_DIR"
 
 if docker compose version >/dev/null 2>&1; then
     DC="docker compose"
@@ -18,18 +20,41 @@ else
     echo "❌ 找不到 docker compose，先完成 Docker 安装"; exit 1
 fi
 
-TOKEN_LINE="${1:-}"
-
-if [ -z "$TOKEN_LINE" ] && [ -f "$RESULT" ]; then
-    TOKEN_LINE="$(python3 -c "
+# 从登录结果里取 env_line。
+# 宿主机有 python3 就直接用（快，不用起容器）；没有就借用镜像内的 python ——
+# 服务器上没装 python3 很常见，这里不能硬依赖宿主机环境。
+read_from_json() {
+    [ -f "$RESULT" ] || return 0
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
 import json,sys
 try:
-    data=json.load(open('$RESULT',encoding='utf-8'))
+    d=json.load(open(sys.argv[1],encoding='utf-8'))
 except Exception:
     sys.exit(0)
-print(data[-1].get('env_line','') if isinstance(data,list) and data else '')
-" 2>/dev/null || true)"
+if isinstance(d,dict): d=[d]
+print((d[-1].get('env_line') or '') if d else '')
+" "$RESULT" 2>/dev/null || true
+        return 0
+    fi
+    $DC run --rm --no-deps -T --entrypoint python wb-checkin -c "
+import json,sys
+try:
+    d=json.load(open('/data/wb_login_result.json',encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+if isinstance(d,dict): d=[d]
+print((d[-1].get('env_line') or '') if d else '')
+" 2>/dev/null | grep 'eyJ' | tail -1 || true
+}
+
+TOKEN_LINE="${1:-}"
+if [ -z "$TOKEN_LINE" ]; then
+    TOKEN_LINE="$(read_from_json)"
 fi
+
+# 旧版登录脚本可能输出多行；env_file 不支持多行值，统一压成 @ 分隔的一行
+TOKEN_LINE="$(printf '%s' "$TOKEN_LINE" | tr -d '\r' | awk 'NF' | paste -sd'@' -)"
 
 if [ -z "$TOKEN_LINE" ]; then
     echo "❌ 没找到可用的 token"
@@ -52,6 +77,7 @@ fi
 # 关键一步：清掉旧的本地令牌库。
 # 上游脚本优先读 data/wb_refresh_tokens.json，且「同手机号」的新 token 不会被合并进去，
 # 不删这个文件的话，重新登录拿到的新凭据会被旧记录静默挡住，表现为一直 401。
+# 注意：这一步会丢掉令牌库里其它账号的刷新令牌，多账号请一次性用 @ 全量传进来。
 if [ -f "$DATA_DIR/wb_refresh_tokens.json" ]; then
     mkdir -p "$DATA_DIR/backup"
     BAK="$DATA_DIR/backup/wb_refresh_tokens.$(date +%Y%m%d-%H%M%S).json"
@@ -69,9 +95,8 @@ fi
 printf "WORKBUDDY_REFRESH_TOKEN='%s'\n" "$TOKEN_LINE" >> "$TMP"
 mv -f "$TMP" "$SECRETS"
 chmod 600 "$SECRETS"
-echo "✅ 凭据已写入 $SECRETS（权限 600）"
+echo "✅ 凭据已写入 $SECRETS（权限 600，账号数 $(( COLONS / 2 ))）"
 
-cd "$APP_DIR"
 echo "🔄 重建容器以加载新凭据 ..."
 $DC up -d --force-recreate wb-checkin >/dev/null
 sleep 2

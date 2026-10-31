@@ -2,7 +2,9 @@ name: build-image
 
 on:
   push:
-    branches: [main]
+    # 两个都列上：GitHub 新建仓库默认分支可能是 main 或 master，
+    # 只写 main 会导致推到 master 后 CI 静默不触发（排查起来极费时间）
+    branches: [main, master]
   workflow_dispatch:
   # 每月 1 号自动重建一次：基础镜像的安全更新会跟着进来
   schedule:
