@@ -1,0 +1,44 @@
+name: wb-checkin
+
+services:
+  wb-checkin:
+    image: ${WB_IMAGE:-ghcr.io/change-me/wb-checkin:latest}
+    container_name: wb-checkin
+    restart: unless-stopped
+    env_file:
+      - ./secrets.env
+    environment:
+      TZ: Asia/Shanghai
+      WORKBUDDY_STATE_DIR: /data
+      RUN_TIMES: ${RUN_TIMES:-07:00,12:00,23:30}
+      RUN_ON_START: ${RUN_ON_START:-0}
+      WORKBUDDY_NOTIFY: ${WORKBUDDY_NOTIFY:-always}
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time;p='/data/.heartbeat';sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<100800 else 1)"]
+      interval: 30m
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+
+  # 只在需要重新登录时手动运行：docker compose run --rm --entrypoint /app/login-entry.sh wb-checkin
+  login:
+    profiles: ["tools"]
+    image: ${WB_IMAGE:-ghcr.io/change-me/wb-checkin:latest}
+    env_file:
+      - ./secrets.env
+    environment:
+      TZ: Asia/Shanghai
+      WORKBUDDY_STATE_DIR: /data
+    volumes:
+      - ./data:/data
+    entrypoint: ["/app/login-entry.sh"]
+    stdin_open: true
+    tty: true

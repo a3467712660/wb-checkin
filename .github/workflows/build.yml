@@ -1,0 +1,126 @@
+name: build-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # 每月 1 号自动重建一次：基础镜像的安全更新会跟着进来
+  schedule:
+    - cron: "0 3 1 * *"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 计算镜像名
+        id: vars
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: 读取上游提交号
+        id: ref
+        run: echo "ref=$(tr -d '\r\n' < upstream.ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.vars.outputs.image }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=raw,value=up-${{ steps.ref.outputs.ref }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            UPSTREAM_REPO=https://github.com/L0NE-6/WorkBuddy-Daily.git
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 构建完先在 GitHub 上跑一遍冒烟，通过了才算镜像可用
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 拉取刚构建的镜像
+        run: docker pull "${{ needs.build.outputs.image }}:latest"
+
+      - name: 断言1 - 无凭据时应给出明确提示且退出码为 1
+        run: |
+          set +e
+          OUT=$(docker run --rm -e WORKBUDDY_STATE_DIR=/data \
+                "${{ needs.build.outputs.image }}:latest" \
+                python /app/src/workbuddy_daily.py 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT" | tail -6
+          if [ "$RC" -ne 1 ]; then
+            echo "::error::期望退出码 1，实际 $RC"; exit 1
+          fi
+          if ! echo "$OUT" | grep -q "未找到可用账号"; then
+            echo "::error::缺少「未找到可用账号」提示，镜像内脚本可能不完整"; exit 1
+          fi
+          echo "✅ 无凭据路径符合预期"
+
+      - name: 断言2 - 定时器能启动并打印时刻表
+        run: |
+          IMG="${{ needs.build.outputs.image }}:latest"
+          docker run -d --name smoke -e RUN_TIMES=07:00,12:00,23:30 \
+            -e WORKBUDDY_STATE_DIR=/data "$IMG"
+          sleep 8
+          docker logs smoke
+          if ! docker logs smoke 2>&1 | grep -q "定时时刻"; then
+            echo "::error::定时器未打印时刻表，启动异常"; docker rm -f smoke; exit 1
+          fi
+          if ! docker logs smoke 2>&1 | grep -q "下一轮"; then
+            echo "::error::未进入等待循环"; docker rm -f smoke; exit 1
+          fi
+          docker rm -f smoke
+          echo "✅ 定时器启动正常"
+
+      - name: 断言3 - 容器内时区为 Asia/Shanghai
+        run: |
+          IMG="${{ needs.build.outputs.image }}:latest"
+          TZ_IN=$(docker run --rm --entrypoint date "$IMG" +%Z)
+          echo "容器时区: $TZ_IN"
+          if [ "$TZ_IN" != "CST" ]; then
+            echo "::error::容器时区不是 CST(+0800)，定时会跑偏"; exit 1
+          fi

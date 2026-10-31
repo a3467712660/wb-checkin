@@ -1,0 +1,12 @@
+# 敏感文件：绝不进仓库
+secrets.env
+.env
+data/
+logs/
+*.bak
+*.log
+__pycache__/
+.venv/
+wb_login_result.json
+wb_refresh_tokens.json
+WORKBUDDY_ACCESS_TOKEN.txt
