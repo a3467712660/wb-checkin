@@ -48,7 +48,7 @@ curl -fsSL https://get.docker.com | sh
 systemctl enable --now docker
 ```
 
-- [ ] 传 6 个文件到 `/opt/wb-checkin/`：
+- [ ] 传 7 个文件到 `/opt/wb-checkin/`：
       `docker-compose.yml` `install.sh` `set-token.sh` `update.sh` `backup.sh` `.env.example` `secrets.env.example`
 
 ```bash
