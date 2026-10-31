@@ -88,12 +88,17 @@ jobs:
       - name: 断言1 - 无凭据时应给出明确提示且退出码为 1
         run: |
           set +e
-          OUT=$(docker run --rm -e WORKBUDDY_STATE_DIR=/data \
+          # 套一层 timeout：万一入口吞掉了命令、容器进了定时器死循环，
+          # 这里 90 秒就失败并说明原因，而不是挂到 job 超时（6 小时）
+          OUT=$(timeout 90 docker run --rm -e WORKBUDDY_STATE_DIR=/data \
                 "${{ needs.build.outputs.image }}:latest" \
                 python /app/src/workbuddy_daily.py 2>&1)
           RC=$?
           set -e
           echo "$OUT" | tail -6
+          if [ "$RC" -eq 124 ]; then
+            echo "::error::容器 90 秒未退出 —— 入口脚本吞掉了命令（检查 entrypoint.sh 的 exec \"\$@\"）"; exit 1
+          fi
           if [ "$RC" -ne 1 ]; then
             echo "::error::期望退出码 1，实际 $RC"; exit 1
           fi
